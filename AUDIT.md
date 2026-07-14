@@ -259,4 +259,11 @@ correctness analysis only uses the noise norm bounds.
   it raises (never silently mis-explains); (iii) the sublattice path can
   produce Klein integer state of hundreds of bits, which is exact but slow -
   an adversarially chosen identity set could make derivation expensive
-  (denial-of-service consideration only).
+  (denial-of-service consideration only); (iv) highly structured label sets
+  (e.g. sequential identities 1..ell whose H() labels are unit vectors) make
+  the Lemma 31 block I - T G^{-1}(A) singular over R, pushing derivation onto
+  the leftmost-rank-profile fallback: ~10x slower, correctness and all tests
+  unaffected (measured: 12.3 s vs 1.0 s per tiny-preset batch).  Random /
+  hash-derived tags - the intended usage - avoid it with overwhelming
+  probability, but an adversary controlling tags can force the slow path
+  (again a DoS consideration only).

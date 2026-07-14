@@ -39,6 +39,18 @@ def timeit(fn, repeat=3):
     return out, statistics.median(ts)
 
 
+def rep_ids(count: int, d: int, salt: int = 0) -> tuple:
+    """Representative identity tags: distinct pseudorandom ints < 2^d (as
+    hash-derived tags would be).  Highly structured tags (e.g. 1..ell, whose
+    labels are unit vectors) can make the Lemma-31 fast path singular and
+    trigger the ~10x slower rank-profile fallback; that degenerate case is
+    reported separately."""
+    import numpy as np
+    rng = np.random.default_rng(1234 + salt)
+    ids = rng.choice(2 ** d, size=count, replace=False)
+    return tuple(int(x) for x in ids)
+
+
 def vec_bytes(v, per_entry_bits):
     return (len(v) * per_entry_bits + 7) // 8
 
@@ -50,7 +62,7 @@ def bench_bibe(name: str, results: dict):
            "pk_bytes": p.pk_bytes(), "ct_bytes": p.ct_bytes(),
            "sbk_bytes": p.sbk_bytes()}
     (pk, sk), row["setup_s"] = timeit(lambda: bibe.setup(p, seed=b"bench"), 1)
-    ids = tuple(range(1, p.ell + 1))
+    ids = rep_ids(p.ell, p.d)
     _, row["enc_s"] = timeit(lambda: bibe.encrypt(pk, ids[0], 1), 5)
     cts = [bibe.encrypt(pk, r, i % 2) for i, r in enumerate(ids)]
 
@@ -82,7 +94,7 @@ def bench_scaling(name: str, results: dict):
     p = toy_params(name)
     pk, sk = bibe.setup(p, seed=b"bench-scale")
     for ellp in range(1, p.ell + 1):
-        ids = tuple(range(1, ellp + 1))
+        ids = rep_ids(ellp, p.d, salt=ellp)
         bibe._derivation_cache.clear()
         t0 = time.perf_counter()
         sbk = bibe.pre_dec(sk, ids)
@@ -189,6 +201,10 @@ def render(results: dict) -> str:
                      pk_kib=r["pk_bytes"] / 1024, ct_kib=r["ct_bytes"] / 1024,
                      sbk_b=r["sbk_actual_bytes"],
                      lct_kib=r["ell_ct_bytes"] / 1024, **r))
+    L.append("\nIdentity tags are representative pseudorandom values; highly "
+             "structured tags (e.g. sequential 1..ell giving unit-vector "
+             "labels) can push per-batch derivation onto the ~10x slower "
+             "rank-profile fallback (correctness unaffected).\n")
     L.append("\n## Batch-size scaling (cold derivations)\n")
     L.append("| preset | ell' | predec | dec | sbk | batch ct |")
     L.append("|---|---|---|---|---|---|")
