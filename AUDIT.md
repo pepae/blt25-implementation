@@ -89,6 +89,17 @@ sublattice rather than the full coset D_{Lambda^u, sigma} that the security
 proof's hybrids (Lemma 18, Hybrid 5/6) simulate.  A security-faithful
 implementation needs T'_A to be a genuine basis.
 
+Two quantitative observations sharpen the point (both measured, toy sizes):
+
+- the literal selection is *frequently* not even the leading block: for the
+  WWW24 batch matrix, W's leading block I - T G^{-1}(A) is singular over R
+  for ~17% of *random* label sets at (n=4, d=4, ell=2) (4/24 sampled sets;
+  structured labels such as unit vectors trigger it deterministically), so
+  the "first M independent columns" then mix in T S columns via the
+  rank-profile fallback;
+- when the leading block *is* nonsingular, its lattice index is astronomical
+  (~3.9 x 10^8 already at n=2, q=257).
+
 What we do about it:
 
 - For TrapGen-structured matrices (the C side: pre-decryption keys, GPV

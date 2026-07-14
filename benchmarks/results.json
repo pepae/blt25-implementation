@@ -1,0 +1,187 @@
+{
+ "bibe": [
+  {
+   "preset": "tiny",
+   "n": 4,
+   "d": 4,
+   "ell": 2,
+   "log2q": 28,
+   "pk_bytes": 12558,
+   "ct_bytes": 4316,
+   "sbk_bytes": 546,
+   "setup_s": 0.023333426999670337,
+   "enc_s": 0.1592801970000437,
+   "predec_cold_s": 13.34377333500015,
+   "predec_warm_s": 0.053634825000244746,
+   "dec_cold_s": 13.451449204999335,
+   "dec_warm_s": 0.00014698900031362427,
+   "max_err_over_q4": 0.07336981554065022,
+   "sbk_norm": 2912.339437634288,
+   "sbk_actual_bytes": 420,
+   "ell_ct_bytes": 8632
+  },
+  {
+   "preset": "small",
+   "n": 4,
+   "d": 6,
+   "ell": 4,
+   "log2q": 29,
+   "pk_bytes": 16835,
+   "ct_bytes": 5471,
+   "sbk_bytes": 566,
+   "setup_s": 0.022966925000218907,
+   "enc_s": 0.22333653200075787,
+   "predec_cold_s": 260.5286614329998,
+   "predec_warm_s": 0.05620500550048746,
+   "dec_cold_s": 263.97736180799984,
+   "dec_warm_s": 0.0004667554999286949,
+   "max_err_over_q4": 0.08607883751392365,
+   "sbk_norm": 3375.8191598484655,
+   "sbk_actual_bytes": 479,
+   "ell_ct_bytes": 21884
+  }
+ ],
+ "scaling": [
+  {
+   "preset": "tiny",
+   "ell_prime": 1,
+   "predec_cold_s": 0.3043175849998079,
+   "dec_cold_s": 0.24618533899956674,
+   "sbk_bytes": 546,
+   "batch_ct_bytes": 4316
+  },
+  {
+   "preset": "tiny",
+   "ell_prime": 2,
+   "predec_cold_s": 12.359274072000517,
+   "dec_cold_s": 12.229561449999892,
+   "sbk_bytes": 546,
+   "batch_ct_bytes": 8632
+  },
+  {
+   "preset": "small",
+   "ell_prime": 1,
+   "predec_cold_s": 0.5260478869995495,
+   "dec_cold_s": 0.4815027670001655,
+   "sbk_bytes": 566,
+   "batch_ct_bytes": 5471
+  },
+  {
+   "preset": "small",
+   "ell_prime": 2,
+   "predec_cold_s": 2.0962615509997704,
+   "dec_cold_s": 2.0799533380004505,
+   "sbk_bytes": 566,
+   "batch_ct_bytes": 10942
+  },
+  {
+   "preset": "small",
+   "ell_prime": 3,
+   "predec_cold_s": 5.474972510000043,
+   "dec_cold_s": 5.348769213000196,
+   "sbk_bytes": 566,
+   "batch_ct_bytes": 16413
+  },
+  {
+   "preset": "small",
+   "ell_prime": 4,
+   "predec_cold_s": 11.719099513000401,
+   "dec_cold_s": 11.29936747299962,
+   "sbk_bytes": 566,
+   "batch_ct_bytes": 21884
+  }
+ ],
+ "tbibe": [
+  {
+   "preset": "tiny",
+   "N": 4,
+   "tau": 3,
+   "log2q": 29,
+   "sigma_flood": 16384.0,
+   "setup_s": 0.10176663699985511,
+   "predec_r1_s": 0.004272218333426281,
+   "predec_r2_total_s": 1.1162643929992555,
+   "combine_s": 0.0001619790000404464,
+   "dec_warm_s": 0.0002661099997567362,
+   "B_th": 1502947.6198930235,
+   "sbk_norm": 191663.47641634804,
+   "comm_r1_bytes": 1276,
+   "comm_r2_bytes": 1262
+  },
+  {
+   "preset": "small",
+   "N": 4,
+   "tau": 3,
+   "log2q": 30,
+   "sigma_flood": 16384.0,
+   "setup_s": 0.10556287500003236,
+   "predec_r1_s": 0.004588466666670381,
+   "predec_r2_total_s": 2.6546032449996346,
+   "combine_s": 0.00015954299942677608,
+   "dec_warm_s": 0.0008068410006671911,
+   "B_th": 1528946.5562787792,
+   "sbk_norm": 209054.41418204975,
+   "comm_r1_bytes": 1365,
+   "comm_r2_bytes": 1350
+  }
+ ],
+ "gpv": [
+  {
+   "preset": "tiny",
+   "N": 4,
+   "tau": 3,
+   "setup_s": 0.10143861199958337,
+   "sign_r1_total_s": 0.012888427000689262,
+   "sign_r2_total_s": 0.004079588000422518,
+   "combine_s": 0.0002808419994835276,
+   "verify_s": 0.00021683100021618884,
+   "sig_bytes": 728
+  },
+  {
+   "preset": "small",
+   "N": 4,
+   "tau": 3,
+   "setup_s": 0.11187470799995936,
+   "sign_r1_total_s": 0.012988377000510809,
+   "sign_r2_total_s": 0.003978527000072063,
+   "combine_s": 0.0003050400000574882,
+   "verify_s": 0.00028349500007607276,
+   "sig_bytes": 797
+  }
+ ],
+ "spec": [
+  {
+   "lambda": 128,
+   "ell": 64,
+   "log2q": 95,
+   "n": 128,
+   "t": 3125120,
+   "pk_MiB": 4583.009262084961,
+   "ct_KiB": 37087.12109375,
+   "sbk_KiB": 71.25,
+   "ell_ct_MiB": 2317.945068359375
+  },
+  {
+   "lambda": 128,
+   "ell": 512,
+   "log2q": 100,
+   "n": 128,
+   "t": 3289600,
+   "pk_MiB": 5078.126525878906,
+   "ct_KiB": 41093.7626953125,
+   "sbk_KiB": 75.0,
+   "ell_ct_MiB": 20546.88134765625
+  },
+  {
+   "lambda": 128,
+   "ell": 4096,
+   "log2q": 105,
+   "n": 128,
+   "t": 3454080,
+   "pk_MiB": 5598.634414672852,
+   "ct_KiB": 45305.873046875,
+   "sbk_KiB": 78.75,
+   "ell_ct_MiB": 181223.4921875
+  }
+ ]
+}

@@ -201,10 +201,11 @@ def render(results: dict) -> str:
                      pk_kib=r["pk_bytes"] / 1024, ct_kib=r["ct_bytes"] / 1024,
                      sbk_b=r["sbk_actual_bytes"],
                      lct_kib=r["ell_ct_bytes"] / 1024, **r))
-    L.append("\nIdentity tags are representative pseudorandom values; highly "
-             "structured tags (e.g. sequential 1..ell giving unit-vector "
-             "labels) can push per-batch derivation onto the ~10x slower "
-             "rank-profile fallback (correctness unaffected).\n")
+    L.append("\nIdentity tags are representative pseudorandom values.  About 17% of"
+             " random label sets (measured at the tiny preset) make the Lemma-31"
+             " leading block singular and push that batch onto the ~10-20x slower"
+             " rank-profile fallback (correctness unaffected) - visible as"
+             " bimodal cold-derivation times across the tables below.\n")
     L.append("\n## Batch-size scaling (cold derivations)\n")
     L.append("| preset | ell' | predec | dec | sbk | batch ct |")
     L.append("|---|---|---|---|---|---|")
