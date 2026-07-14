@@ -42,17 +42,28 @@ class TBIBEPartyKey:
 @dataclass
 class PredecOneOut:
     party: int
-    msg: tgs.TGSRoundOneMsg
-    state: tgs.TGSRoundOneState   # secret; kept by the party
+    msgs: list[tgs.TGSRoundOneMsg]     # one TGS sub-session per message bit
+    states: list[tgs.TGSRoundOneState]  # secret; kept by the party
+
+    @property
+    def msg(self) -> tgs.TGSRoundOneMsg:
+        return self.msgs[0]
+
+    @property
+    def state(self) -> tgs.TGSRoundOneState:
+        return self.states[0]
 
 
 @dataclass
 class PredecTwoOut:
     party: int
-    mask_row: np.ndarray          # m_i (echoed for the combiner)
-    sbk_share: tgs.TGSRoundTwoMsg
+    sbk_shares: list[tgs.TGSRoundTwoMsg]  # one per message bit
     sidsp: bytes
     cs: list[np.ndarray]          # target c per message bit
+
+    @property
+    def sbk_share(self) -> tgs.TGSRoundTwoMsg:
+        return self.sbk_shares[0]
 
 
 @dataclass
@@ -74,60 +85,80 @@ def setup(params: Params, N: int, tau: int, seed: bytes | None = None):
 encrypt = bibe.encrypt          # TBIBE.Enc == BIBE.Enc
 
 
+def _norm_round1(round1: dict) -> dict[int, list[tgs.TGSRoundOneMsg]]:
+    """Accept either single TGSRoundOneMsg values (1-bit callers) or lists
+    (multi-bit); normalize to lists."""
+    return {i: (v if isinstance(v, list) else [v]) for i, v in round1.items()}
+
+
 def predec_one(party: TBIBEPartyKey, sid: int, act: tuple[int, ...],
                identities) -> PredecOneOut:
-    """TBIBE.PredecOne: TGS round one (independent of the batch)."""
+    """TBIBE.PredecOne: TGS round one (independent of the batch).
+
+    Multi-bit messages (Section 5.3) run one independent TGS sub-session per
+    message bit under the same (sid, act): independent flooding vectors p_i
+    and PRF masks per bit (sub-session index feeds the PRF)."""
     p = party.pk.params
-    msg, state = tgs.round_one(party.tgs_key, sid, act, party.pk.C, p.q,
-                               p.sigma_flood)
-    return PredecOneOut(party=party.index, msg=msg, state=state)
-
-
-def predec_two(party: TBIBEPartyKey, state: tgs.TGSRoundOneState, sid: int,
-               act: tuple[int, ...], identities,
-               round1: dict[int, tgs.TGSRoundOneMsg]) -> PredecTwoOut:
-    """TBIBE.PredecTwo: derive the batch targets via Hsp^th (bound to the
-    round-one transcript) and emit the TGS round-two share."""
-    pk = party.pk
-    p = pk.params
     if p.sigma_flood <= 0:
         raise ValueError("params.sigma_flood must be set for the threshold scheme")
-    sidsp = hash_tr(sid, act, [round1[j].e for j in sorted(round1)])
+    msgs, states = [], []
+    for j in range(p.msg_bits):
+        msg, state = tgs.round_one(party.tgs_key, sid, act, party.pk.C, p.q,
+                                   p.sigma_flood, sub=j)
+        msgs.append(msg)
+        states.append(state)
+    return PredecOneOut(party=party.index, msgs=msgs, states=states)
+
+
+def predec_two(party: TBIBEPartyKey, state, sid: int,
+               act: tuple[int, ...], identities,
+               round1: dict) -> PredecTwoOut:
+    """TBIBE.PredecTwo: derive the batch targets via Hsp^th (bound to the
+    round-one transcript across all sub-sessions) and emit one TGS round-two
+    share per message bit."""
+    pk = party.pk
+    p = pk.params
+    states = state if isinstance(state, list) else [state]
+    r1 = _norm_round1(round1)
+    assert all(len(v) == p.msg_bits for v in r1.values())
+    assert len(states) == p.msg_bits
+    # transcript tag binds every sub-session's syndromes
+    syndromes = [r1[j][b].e for j in sorted(r1) for b in range(p.msg_bits)]
+    sidsp = hash_tr(sid, act, syndromes)
     der = bibe.derive(pk, identities, sidsp=sidsp)
     shares = []
-    for j in range(p.msg_bits):
-        shares.append(tgs.round_two(party.tgs_key, state, sid, act, pk.C,
-                                    p.q, der.cs[j], round1))
-    # message bits share one round-1 (p_i is reused across bits only if the
-    # caller runs one bit per sid; for msg_bits > 1 we require msg_bits = 1
-    # or independent sids per bit - enforced here for safety.
-    if p.msg_bits != 1:
-        raise NotImplementedError(
-            "threshold pre-decryption is specified for 1-bit messages; run "
-            "one TGS session per message bit for the multi-bit variant")
-    return PredecTwoOut(party=party.index, mask_row=round1[party.index].mask_row,
-                        sbk_share=shares[0], sidsp=sidsp, cs=der.cs)
+    for b in range(p.msg_bits):
+        r1_bit = {i: msgs[b] for i, msgs in r1.items()}
+        shares.append(tgs.round_two(party.tgs_key, states[b], sid, act, pk.C,
+                                    p.q, der.cs[b], r1_bit, sub=b))
+    return PredecTwoOut(party=party.index, sbk_shares=shares, sidsp=sidsp,
+                        cs=der.cs)
 
 
 def combine(pk: bibe.PublicKey, sid: int, act: tuple[int, ...], identities,
-            round1: dict[int, tgs.TGSRoundOneMsg],
+            round1: dict,
             round2: dict[int, PredecTwoOut]) -> ThresholdPreDecKey | None:
-    """TBIBE.Comb: check sidsp/c consistency, then TGS.Comb."""
+    """TBIBE.Comb: check sidsp/c consistency, then TGS.Comb per message bit."""
     p = pk.params
+    r1 = _norm_round1(round1)
     sidsps = {r2.sidsp for r2 in round2.values()}
     if len(sidsps) != 1:
         return None
     sidsp = next(iter(sidsps))
-    c_refs = [tuple(int(x) for x in r2.cs[0]) for r2 in round2.values()]
-    if len(set(c_refs)) != 1:
-        return None
-    c = round2[next(iter(round2))].cs[0]
-    shares = {i: r2.sbk_share for i, r2 in round2.items()}
-    sbk = tgs.combine(act, pk.C, p.q, c, round1, shares)
-    if sbk is None:
-        return None
+    sbks = []
+    for b in range(p.msg_bits):
+        c_refs = [tuple(int(x) for x in r2.cs[b]) for r2 in round2.values()]
+        if len(set(c_refs)) != 1:
+            return None
+        c = round2[next(iter(round2))].cs[b]
+        shares = {i: r2.sbk_shares[b] for i, r2 in round2.items()}
+        r1_bit = {i: msgs[b] for i, msgs in r1.items()}
+        sbk = tgs.combine(act, pk.C, p.q, c, r1_bit, shares)
+        if sbk is None:
+            return None
+        sbks.append(sbk)
     return ThresholdPreDecKey(act=act, sidsp=sidsp,
-                              identities=tuple(identities), sbks=[sbk])
+                              identities=tuple(identities), sbks=sbks)
 
 
 def decrypt(pk: bibe.PublicKey, pdk: ThresholdPreDecKey,

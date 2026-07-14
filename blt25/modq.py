@@ -26,19 +26,24 @@ def _chunk_size(max_abs_a: int, max_abs_b: int) -> int:
 
 def matmul_q(a: np.ndarray, b: np.ndarray, q: int,
              max_abs_a: int | None = None, max_abs_b: int | None = None) -> np.ndarray:
-    """(a @ b) mod q with int64 overflow protection.
+    """(a @ b) mod q, exact for any q.
 
-    ``max_abs_a`` / ``max_abs_b`` are bounds on |entries|; default assumes
-    canonical mod-q values in [0, q).
+    int64 fast path with inner-dimension chunking while products fit; exact
+    Python-int (object dtype) backend otherwise, so moduli beyond 2^31 -
+    e.g. the enlarged q that Theorem-7-scale flooding needs - work
+    transparently (slower).  ``max_abs_a`` / ``max_abs_b`` are bounds on
+    |entries|; default assumes canonical mod-q values in [0, q).
     """
-    a = np.asarray(a, dtype=np.int64)
-    b = np.asarray(b, dtype=np.int64)
     if max_abs_a is None:
         max_abs_a = q - 1
     if max_abs_b is None:
         max_abs_b = q - 1
     if max(1, max_abs_a) * max(1, max_abs_b) >= (1 << 62):
-        raise ValueError("entries too large for int64 backend; use object arithmetic")
+        A = np.asarray(a, dtype=object)
+        B = np.asarray(b, dtype=object)
+        return ((A @ B) % q)
+    a = np.asarray(a, dtype=np.int64)
+    b = np.asarray(b, dtype=np.int64)
     k = a.shape[-1]
     step = _chunk_size(max_abs_a, max_abs_b)
     if step >= k:
@@ -59,6 +64,10 @@ def center_lift(x: np.ndarray | int, q: int):
     if isinstance(x, (int, np.integer)):
         x = int(x) % q
         return x - q if x > q // 2 else x
+    if q >= (1 << 31):
+        arr = np.asarray(x, dtype=object) % q
+        return np.array([v - q if v > q // 2 else v for v in arr.reshape(-1)],
+                        dtype=object).reshape(arr.shape)
     x = np.asarray(x, dtype=np.int64) % q
     return np.where(x > q // 2, x - q, x)
 
@@ -109,13 +118,14 @@ def solve_mod_q(A: np.ndarray, B: np.ndarray, q: int) -> np.ndarray:
     entry in the leftmost unused column".  Deterministic so that every party
     derives the same solution.  Raises ValueError if the system is inconsistent.
     """
-    A = np.asarray(A, dtype=np.int64) % q
-    B = np.asarray(B, dtype=np.int64) % q
+    dtype = object if q >= (1 << 31) else np.int64
+    A = np.asarray(A, dtype=dtype) % q
+    B = np.asarray(B, dtype=dtype) % q
     single = B.ndim == 1
     if single:
         B = B.reshape(-1, 1)
     n, m = A.shape
-    M = np.concatenate([A, B], axis=1).astype(np.int64)
+    M = np.concatenate([A, B], axis=1).astype(dtype)
     piv_cols: list[int] = []
     row = 0
     for col in range(m):

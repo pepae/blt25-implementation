@@ -154,6 +154,46 @@ class RegevTransport:
                                    q)[0, 0])) % q
         return int((inner + self.scale // 2) // self.scale) % self.msg_space
 
+    # -- threshold decryption ([11] Bendlin-Damgard style) -------------------
+    def share_secret(self, N: int, tau: int) -> list[np.ndarray]:
+        """tau-of-N Shamir shares of the Regev secret key (party i gets
+        share evaluated at x = i)."""
+        import secrets
+        q, n = self.p.q_reg, self.p.n_reg
+        coeffs = [self.sk % q]
+        rng = random_stream()
+        for _ in range(tau - 1):
+            coeffs.append(rng.uniform_mod_vec(n, q))
+        shares = []
+        for i in range(1, N + 1):
+            acc = np.zeros(n, dtype=np.int64)
+            xpow = 1
+            for cvec in coeffs:
+                acc = (acc + cvec * xpow) % q
+                xpow = (xpow * i) % q
+            shares.append(acc)
+        return shares
+
+    def partial_dec_chunk(self, share: np.ndarray, party: int,
+                          act: tuple[int, ...], ct,
+                          flood_width: float = 256.0) -> int:
+        """Party's partial decryption: lambda_i <s_i, c1> + e_flood.  The
+        Lagrange coefficient multiplies *before* flooding so the combined
+        error is only the sum of tau small flooding terms."""
+        from .tgs import lagrange_at_zero
+        q = self.p.q_reg
+        c1, _ = ct
+        lam = lagrange_at_zero(act, q)[party]
+        inner = int(matmul_q(share.reshape(1, -1), c1.reshape(-1, 1), q)[0, 0])
+        e = int(sample_dgauss_vec(1, flood_width, random_stream())[0])
+        return (lam * inner + e) % q
+
+    def combine_partials_chunk(self, ct, partials: dict[int, int]) -> int:
+        q = self.p.q_reg
+        _, c2 = ct
+        inner = (int(c2) - sum(int(v) for v in partials.values())) % q
+        return int((inner + self.scale // 2) // self.scale) % self.msg_space
+
 
 @dataclass
 class BMCiphertext:
@@ -213,6 +253,27 @@ class BeatMev:
                 for ct in cts[1:]:
                     acc = self.transport.add(acc, ct.key_cts[coord][c])
                 s = self.transport.dec_chunk(acc)
+                sbk[coord] = (int(sbk[coord]) + (s << (cb * c))) % q
+        return sbk
+
+    def pre_dec_threshold(self, cts: list[BMCiphertext],
+                          shares: list[np.ndarray],
+                          act: tuple[int, ...]) -> np.ndarray:
+        """Threshold variant of pre_dec: the committee's Regev key is
+        tau-of-N Shamir-shared (self.transport.share_secret) and each active
+        party contributes flooded partial decryptions per chunk - the
+        thresholdization route Appendix A.4 points to via [11]."""
+        assert len({ct.index for ct in cts}) == len(cts), "indices must differ"
+        m, nc, cb, q = self.p.m, self.p.n_chunks, self.p.chunk_bits, self.p.q
+        sbk = np.zeros(m, dtype=object)
+        for coord in range(m):
+            for c in range(nc):
+                acc = cts[0].key_cts[coord][c]
+                for ct in cts[1:]:
+                    acc = self.transport.add(acc, ct.key_cts[coord][c])
+                partials = {i: self.transport.partial_dec_chunk(
+                    shares[i - 1], i, act, acc) for i in act}
+                s = self.transport.combine_partials_chunk(acc, partials)
                 sbk[coord] = (int(sbk[coord]) + (s << (cb * c))) % q
         return sbk
 

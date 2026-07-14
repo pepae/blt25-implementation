@@ -37,6 +37,7 @@ class PublicKey:
     crs: www24.CRS
     C: np.ndarray                 # (n x m_c)
     us: np.ndarray                # (msg_bits x n) target vectors u_j
+    pk_seed: bytes | None = None  # Remark 2: crs/us derived from this seed
 
     def fingerprint(self) -> bytes:
         import hashlib
@@ -73,15 +74,43 @@ class PreDecKey:
         return max(float(np.linalg.norm(s.astype(np.float64))) for s in self.sbks)
 
 
-def setup(params: Params, seed: bytes | None = None):
-    """BIBE.Setup(1^lambda, 1^ell) -> (pk, sk)."""
+def setup(params: Params, seed: bytes | None = None,
+          compress_pk: bool = False):
+    """BIBE.Setup(1^lambda, 1^ell) -> (pk, sk).
+
+    With ``compress_pk`` (Remark 2), the random public components - the CRS
+    [A | B] and the target vectors u_j - are derived from a 32-byte public
+    seed via the random oracle, so the public key is just (seed_pk, C):
+    |pk| = O(n m log q).  The security proof only changes in that the
+    simulator programs the oracle behind the seed (Remark 2).
+    """
     stream = stream_from_bytes(seed) if seed is not None else random_stream()
+    if compress_pk:
+        seed_pk = stream_from_bytes(seed + b"/pkseed").take_bits(256).to_bytes(
+            32, "big") if seed is not None else __import__("os").urandom(32)
+        ro = stream_from_bytes(b"blt25/Hpk/" + seed_pk)
+        crs = www24.gen(params.n, params.q, params.d, ro)
+        C, T_C, Abar, R = trapgen(params.n, params.q, params.m_c, stream,
+                                  return_parts=True)
+        us = ro.uniform_mod_mat(params.msg_bits, params.n, params.q)
+        pk = PublicKey(params=params, crs=crs, C=C, us=us, pk_seed=seed_pk)
+        return pk, SecretKey(pk=pk, T_C=T_C, Abar=Abar, R=R)
     crs = www24.gen(params.n, params.q, params.d, stream)
     C, T_C, Abar, R = trapgen(params.n, params.q, params.m_c, stream,
                               return_parts=True)
     us = stream.uniform_mod_mat(params.msg_bits, params.n, params.q)
     pk = PublicKey(params=params, crs=crs, C=C, us=us)
     return pk, SecretKey(pk=pk, T_C=T_C, Abar=Abar, R=R)
+
+
+def expand_compressed_pk(params: Params, pk_seed: bytes,
+                         C: np.ndarray) -> PublicKey:
+    """Reconstruct the full public key from the Remark-2 compressed form
+    (seed_pk, C)."""
+    ro = stream_from_bytes(b"blt25/Hpk/" + pk_seed)
+    crs = www24.gen(params.n, params.q, params.d, ro)
+    us = ro.uniform_mod_mat(params.msg_bits, params.n, params.q)
+    return PublicKey(params=params, crs=crs, C=C, us=us, pk_seed=pk_seed)
 
 
 def _chi_vec(k: int, params: Params, stream: BitStream) -> np.ndarray:

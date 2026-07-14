@@ -30,7 +30,25 @@ from .bits import random_stream
 from .gadget import g_inverse
 from .gaussian import sample_dgauss_vec
 from .hashes import prf
-from .modq import matmul_q
+from .modq import center_lift, matmul_q
+
+
+def _sub_sid(sid: int, sub: int) -> int:
+    """Distinct PRF session index per (sid, sub-session).  Callers keep sid
+    unique per query; sub < 2^20 indexes message bits within a query."""
+    assert 0 <= sub < (1 << 20)
+    return (int(sid) << 20) | sub
+
+
+def _zero_vec(k: int, q: int) -> np.ndarray:
+    return (np.zeros(k, dtype=object) if q >= (1 << 31)
+            else np.zeros(k, dtype=np.int64))
+
+
+def _mod_vec(v: np.ndarray, q: int) -> np.ndarray:
+    if q >= (1 << 31):
+        return np.asarray(v, dtype=object) % q
+    return np.asarray(v, dtype=np.int64) % q
 
 
 @dataclass
@@ -86,18 +104,20 @@ def setup(T_C: np.ndarray, N: int, tau: int, q: int,
     """
     m, mt = T_C.shape
     coin = random_stream()
+    big = q >= (1 << 31)
+    dtype = object if big else np.int64
     # coefficient tensors: degree tau-1 polynomial per entry, constant = T_C
-    coeffs = [np.asarray(T_C, dtype=np.int64) % q]
+    coeffs = [np.asarray(T_C, dtype=dtype) % q]
     for _ in range(tau - 1):
-        coeffs.append(coin.uniform_mod_mat(m, mt, q))
+        coeffs.append(coin.uniform_mod_mat(m, mt, q).astype(dtype))
     shares = []
     for i in range(1, N + 1):
-        acc = np.zeros((m, mt), dtype=np.int64)
+        acc = np.zeros((m, mt), dtype=dtype)
         xpow = 1
         for c in coeffs:
             acc = (acc + c * xpow) % q
             xpow = (xpow * i) % q
-        shares.append(acc)
+        shares.append(acc if big else acc.astype(np.int64))
     seeds = {(i, j): secrets.token_bytes(kappa_bytes)
              for i in range(1, N + 1) for j in range(1, N + 1) if i != j}
     keys = []
@@ -110,39 +130,50 @@ def setup(T_C: np.ndarray, N: int, tau: int, q: int,
 
 
 def round_one(key: TGSPartyKey, sid: int, act: tuple[int, ...],
-              C: np.ndarray, q: int, sigma_flood: float):
-    """TGS.RoundOne: publish (e_i, m_i), keep p_i."""
+              C: np.ndarray, q: int, sigma_flood: float, sub: int = 0):
+    """TGS.RoundOne: publish (e_i, m_i), keep p_i.
+
+    ``sub`` distinguishes independent sub-sessions sharing one (sid, act)
+    pair - e.g. one per message bit in multi-bit threshold pre-decryption;
+    masks and flooding vectors are independent per sub-session."""
     assert key.index in act
     m = C.shape[1]
     p = sample_dgauss_vec(m, sigma_flood, random_stream())
-    e = matmul_q(C, (p % q).reshape(-1, 1), q).reshape(-1)
-    mask = np.zeros(m, dtype=np.int64)
+    e = matmul_q(C, _mod_vec(p, q).reshape(-1, 1), q,
+                 max_abs_b=q - 1).reshape(-1)
+    mask = _zero_vec(m, q)
     for j in act:
         if j != key.index:
-            mask = (mask + prf(key.seeds_row[j], sid, m, q)) % q
+            mask = (mask + prf(key.seeds_row[j], _sub_sid(sid, sub), m, q)) % q
     return (TGSRoundOneMsg(party=key.index, e=e, mask_row=mask),
             TGSRoundOneState(party=key.index, sid=sid, p=p))
 
 
 def round_two(key: TGSPartyKey, state: TGSRoundOneState, sid: int,
               act: tuple[int, ...], C: np.ndarray, q: int, c: np.ndarray,
-              round1: dict[int, TGSRoundOneMsg]) -> TGSRoundTwoMsg:
+              round1: dict[int, TGSRoundOneMsg], sub: int = 0) -> TGSRoundTwoMsg:
     """TGS.RoundTwo: publish sbk_i = lambda_i T_{C,i} y' + p_i + m*_i."""
     assert state.sid == sid and set(round1) == set(act)
     n, m = C.shape
-    e_sum = np.zeros(n, dtype=np.int64)
+    e_sum = _zero_vec(n, q)
     for j in act:
         e_sum = (e_sum + round1[j].e) % q
-    c_prime = (np.asarray(c, dtype=np.int64) - e_sum) % q
-    y_prime = g_inverse(c_prime, q)                  # binary, deterministic
+    c_prime = (np.asarray(c, dtype=object if q >= (1 << 31) else np.int64)
+               - e_sum) % q
+    y_prime = g_inverse(np.asarray(c_prime, dtype=np.int64)
+                        if q < (1 << 62) else c_prime, q)
     lam = lagrange_at_zero(act, q)[key.index]
     ty = matmul_q(key.T_share, y_prime.reshape(-1, 1), q,
                   max_abs_b=1).reshape(-1)
-    share = (lam * ty) % q
-    share = (share + state.p) % q
+    if q >= (1 << 31):
+        share = (np.asarray(ty, dtype=object) * lam) % q
+    else:
+        share = matmul_q(ty.reshape(-1, 1), np.array([[lam]], dtype=np.int64),
+                         q).reshape(-1)
+    share = (share + _mod_vec(state.p, q)) % q
     for j in act:
         if j != key.index:
-            share = (share + prf(key.seeds_col[j], sid, m, q)) % q
+            share = (share + prf(key.seeds_col[j], _sub_sid(sid, sub), m, q)) % q
     return TGSRoundTwoMsg(party=key.index, sbk_share=share)
 
 
@@ -155,11 +186,11 @@ def combine(act: tuple[int, ...], C: np.ndarray, q: int, c: np.ndarray,
     short; reduction mod q then centered lift recovers it exactly whenever
     ||sbk||_inf < q/2, which Theorem 4's parameters guarantee)."""
     m = C.shape[1]
-    acc = np.zeros(m, dtype=np.int64)
+    acc = _zero_vec(m, q)
     for i in act:
         acc = (acc + round2[i].sbk_share - round1[i].mask_row) % q
-    if not (matmul_q(C, acc.reshape(-1, 1), q).reshape(-1)
-            == np.asarray(c, dtype=np.int64) % q).all():
+    lhs = matmul_q(C, acc.reshape(-1, 1), q, max_abs_b=q - 1).reshape(-1)
+    rhs = np.asarray(c, dtype=object) % q
+    if not all(int(a) == int(b) for a, b in zip(lhs, rhs)):
         return None
-    centered = np.where(acc > q // 2, acc - q, acc)
-    return centered
+    return center_lift(acc, q)

@@ -89,7 +89,7 @@ sublattice rather than the full coset D_{Lambda^u, sigma} that the security
 proof's hybrids (Lemma 18, Hybrid 5/6) simulate.  A security-faithful
 implementation needs T'_A to be a genuine basis.
 
-Two quantitative observations sharpen the point (both measured, toy sizes):
+Quantitative observations sharpening the point (all measured):
 
 - the literal selection is *frequently* not even the leading block: for the
   WWW24 batch matrix, W's leading block I - T G^{-1}(A) is singular over R
@@ -98,47 +98,81 @@ Two quantitative observations sharpen the point (both measured, toy sizes):
   the "first M independent columns" then mix in T S columns via the
   rank-profile fallback;
 - when the leading block *is* nonsingular, its lattice index is astronomical
-  (~3.9 x 10^8 already at n=2, q=257).
+  (~3.9 x 10^8 already at n=2, q=257), and the MG02 triangularization shows
+  the defect is *low-rank*: consistently ~2 directions carry H_ii of
+  hundreds of bits (e.g. 2^167 at n=2, d=3).
 
-What we do about it:
+**Why the deviation is in fact load-bearing (the deeper finding).**  The true
+Lambda^perp(A) has covolume q^{rank} spread over M >> rank log q dimensions -
+an extremely *dense* lattice whose genuine bases necessarily contain
+Gram-Schmidt vectors of norm ~ ||s~_i|| / H_ii, i.e. hundreds of bits below 1.
+No float64 pipeline can even represent that geometry (we measured Klein
+producing ~100x inflated samples on a genuine basis under float64 GS), so at
+standard precision the Lemma-31 *sublattice* sampler is effectively the only
+runnable option - the huge index is what keeps the geometry float-friendly.
+Any implementation of the paper's Appendix C construction faces this
+dichotomy: either sample the sublattice coset (as the literal text does), or
+pay arbitrary-precision Gram-Schmidt with precision Theta(log index).  This
+belongs in an erratum discussion with the authors: the security proof's
+Hybrid 5/6 simulation (Lemma 18) simulates full-coset Gaussians, which the
+literal honest sampler does not produce, and cannot cheaply produce.
+
+What the implementation provides:
 
 - For TrapGen-structured matrices (the C side: pre-decryption keys, GPV
-  signatures) we construct a **provably exact basis**
-  `trapdoor.trapgen_exact_basis`:
-  B = [[I - R G^{-1}(Abar), R S], [-G^{-1}(Abar), S]], whose determinant is
+  signatures) a **provably exact basis** `trapdoor.trapgen_exact_basis`:
+  B = [[I - R G^{-1}(Abar), R S], [-G^{-1}(Abar), S]], determinant
   +-det(S) = +-q^n by a unimodular-transformation argument
-  (`test_exact_basis_is_genuine`).  This path is the default for C.
-- For the WWW24 matrix D_ell (trapdoor from StructTrapGen, no TrapGen
-  structure) we keep the paper-literal Lemma 31 selection and flag the
-  exactness status per instance (`check_exactness`).  Constructing a short
-  exact basis from an arbitrary gadget trapdoor (e.g. via [MG02, Lemma 7.1]
-  ToBasis against a mod-q HNF) is possible but was out of scope; the honest
-  protocol is unaffected.
+  (`test_exact_basis_is_genuine`).  Well-conditioned (index 1, so no dense
+  geometry arises); default for C.
+- For the WWW24 matrix D_ell a complete **opt-in exact pipeline**
+  (`config.EXACT_WWW24_BASIS`, needs python-flint):
+  `tobasis.to_basis` runs MG02 ToBasis against the free q-ary echelon basis
+  (one FLINT HNF + one triangular solve), verified per instance
+  (in-lattice, |det| = q^rank mod two primes, GS domination
+  ||r~_i|| <= ||s~_i|| so all sigma calibrations remain valid); when the H
+  diagonal reveals dense geometry the sampler switches to mpmath
+  Gram-Schmidt and Klein centers at precision 160 + log2(max H_ii), with
+  dynamically sized CRT recovery in ExplainSL (coefficients span hundreds of
+  bits).  Verified end-to-end: correct sample norms (ratio 1.03 of
+  sigma sqrt(M)/sqrt(2 pi)), determinism, explain round-trip
+  (`test_exact_basis_sampling_quality_and_explain`).  Cost: flint HNF
+  ~3 s at M=378 and ~5 min at M=1232, plus O(M^3) mpf work - which is why
+  the mode is opt-in rather than default.
+- The default remains the paper-literal Lemma 31 selection (fast,
+  float-friendly, correctness/determinism/explainability unaffected).
 
-### S3.2 Discrete Gaussian CDFs are approximated in the middle regime
+### S3.2 Discrete Gaussian CDFs (approximation now confined to s <= 48)
 
-The 1-D sampler uses (a) exact windowed summation for s <= 48, (b) the
-continuous-Gaussian CDF at half-integer cut points with the first
-Euler-Maclaurin correction for 48 < s <= 2^40 (per-point relative error
-O(1/s^4), i.e. < 1e-10 at the smallest widths in that regime), and (c) the
-same formula in mpmath beyond.  Determinism and explainability are *exact*
-for any fixed monotone F; only the distribution's distance from the ideal
-discrete Gaussian is affected (bounded by ~dim x per-point error < 1e-6 per
-SampleLeft call at toy sizes; a production implementation should use a
-constant-time exact sampler).
+The 1-D sampler uses (a) exact windowed summation for s <= 48 (float64
+weights + fsum: ~1e-15 relative per point, the only remaining approximation)
+and (b) for every larger width the erf CDF with first Euler-Maclaurin
+correction evaluated in mpmath at NBITS-scale precision (per-point error
+~2^-140; the retired float64 middle regime had ~1e-10).  Centers of any
+magnitude (including mpf) are handled by integer shifting inside the
+sampler.  Determinism and explainability are *exact* for any fixed monotone
+F; a production implementation still needs a constant-time sampler.
 
 ### S3.3 Floating-point Gram-Schmidt and center computations
 
-GS vectors come from LAPACK QR (float64); Klein centers are exactly-rounded
-float sums of exact integer state.  All *integer* state (targets, coefficient
-updates, outputs) is exact Python-int arithmetic, so coset membership and all
-algebraic identities hold exactly regardless of conditioning.  The float data
-affects (i) sampling quality and (ii) cross-platform reproducibility: two
-decryptors on different BLAS builds could in principle derive different (still
-correct) v from the same tape, which would break their agreement.  Within a
-process the data is computed once and shared (PreDec = Dec agreement is
-guaranteed and tested).  A deployment must pin the numeric stack or implement
-fixed-point GS; flagged here as the main engineering gap.
+GS vectors come from LAPACK QR (float64) by default; Klein centers are
+exactly-rounded float sums of exact integer state.  All *integer* state
+(targets, coefficient updates, outputs) is exact Python-int arithmetic, so
+coset membership and all algebraic identities hold exactly regardless of
+conditioning.  The float data affects (i) sampling quality and (ii)
+cross-platform reproducibility.  Two remedies are now built in:
+
+- **Portable deterministic GS** (`config.PORTABLE_GS` /
+  `BLT25_PORTABLE_GS=1`): classical GS built solely from elementwise
+  IEEE-754 products and math.fsum (exactly-rounded sums, no reassociation),
+  bit-identical on any IEEE platform at ~30-100x the LAPACK cost - for
+  heterogeneous multi-party deployments where all decryptors must derive
+  identical openings.
+- **Arbitrary-precision GS** (automatic in exact-basis mode when the H
+  diagonal demands it; see S3.1) for dense genuine bases.
+
+Within a process the data is computed once and shared (PreDec = Dec
+agreement is guaranteed and tested) whichever backend is active.
 
 ### S3.4 Toy parameters
 
@@ -171,6 +205,19 @@ are not clamped at ~8.3 sd and per-step CDF increments never collapse.
 Regression tests: `test_spec_scale_flooding_widths`,
 `test_extreme_tape_reaches_true_tails`.
 
+### S3.5b Object-integer backend and the Theorem-7 flooding demo
+
+`modq.matmul_q` / `solve_mod_q` / `center_lift` now fall back to exact
+Python-int arithmetic when the modulus exceeds the int64-safe range
+(supported up to q < 2^62), and the TGS/TBIBE stack is dtype-agnostic.
+Consequence: threshold GPV runs end-to-end with
+sigma_flood = B_td sqrt(q_sig) lambda - the actual Theorem 7 setting - at
+q ~ 2^45 (`test_gpv_at_theorem7_scale_flooding`), removing the "flooding is
+nominal only" caveat for the *signature* scheme.  For TBIBE, Remark 3's
+sigma_flood = 2^Omega(lambda) remains out of runnable range for the
+IND-style game (it needs q beyond the object backend's comfort at real
+dimensions), unchanged from S3.5.
+
 ### S3.6 Hash instantiations
 
 All random oracles are SHAKE-256 with domain separation; mod-q outputs take
@@ -183,9 +230,28 @@ computational; PreDec/Dec reject colliding indices, as the paper specifies.
 
 Section 5.3 specifies N target vectors u_j and per-bit ct1 components but does
 not spell out PreDec; we run one Hsp-derived SampleLeft and one sbk_j per bit
-(the natural reading; |sbk| grows by N).  The threshold scheme is implemented
-for msg_bits = 1 (the paper's setting); multi-bit TBIBE would need one TGS
-session per bit and is rejected with a clear error.
+(the natural reading; |sbk| grows by N).  The threshold scheme now supports
+multi-bit messages by running one independent TGS sub-session per bit under
+the same (sid, act): flooding vectors and PRF masks are separated by a
+sub-session index folded into the PRF input (sid' = sid << 20 | bit), and the
+transcript tag sidsp binds the syndromes of *all* sub-sessions
+(`test_multibit_tbibe`).
+
+### S3.7b Remark 2, CCA2 wrapper, threshold BEAT-MEV (implemented)
+
+- Remark 2 (RO-compressed pk): `bibe.setup(compress_pk=True)` derives the CRS
+  and target vectors from a 32-byte public seed; |pk| shrinks to (seed, C);
+  `expand_compressed_pk` reconstructs (`test_compressed_pk_roundtrip`).
+- Section 1.2 blueprint: `bibe_cca` wraps ciphertexts with Lamport one-time
+  signatures (SHAKE-256): identity tag = H(vk), signature over the whole
+  ciphertext; validation rejects replicated tags and mauled ciphertexts
+  (CHK-style CCA mechanics; formal batch-CCA claim per the paper's cited
+  transforms [17, 15, 16]).  Note toy d makes tag collisions likely at
+  larger batch counts - real deployments need d >= 2 lambda as in
+  spec_params.
+- Appendix A.4 thresholdization: `BeatMev.pre_dec_threshold` implements
+  [11]-style threshold Regev decryption of the homomorphic key sums
+  (Lagrange-premultiplied partials with per-party flooding).
 
 ### S3.8 The KP-ABE instantiation is ours
 

@@ -72,14 +72,15 @@ def test_tgs_mask_cancellation(tgs_setup):
     c = np.ones(p.n, dtype=np.int64)
     r1, r2, sbk = run_tgs(p, C, keys, act, sid, c)
     masks_row = sum(int(x) for i in act for x in r1[i].mask_row) % p.q
-    # recompute column masks
+    # recompute column masks (PRF sessions are sub-indexed: sid' = sid<<20 | sub)
     from blt25.hashes import prf
+    from blt25.tgs import _sub_sid
     col_total = 0
     for i in act:
         for j in act:
             if j != i:
-                col_total += int(prf(keys[i - 1].seeds_col[j], sid, p.m_c,
-                                     p.q).sum())
+                col_total += int(prf(keys[i - 1].seeds_col[j],
+                                     _sub_sid(sid, 0), p.m_c, p.q).sum())
     assert masks_row % p.q == col_total % p.q
 
 

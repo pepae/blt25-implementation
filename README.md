@@ -125,13 +125,34 @@ The implementation follows the paper algorithm-by-algorithm (the conformance
 map in AUDIT.md lists every object).  Deviations are documented in
 AUDIT.md section 3; the two worth knowing about before reading code:
 
-1. **Lemma 31 as literally stated can yield a proper sublattice** of
-   Lambda^perp(A) (measured index ~2^28 on a small instance).  For
-   TrapGen-shaped matrices we construct a provably exact basis instead; for
-   the WWW24 batch matrix we keep the paper-literal selection (correctness,
-   determinism and explainability are unaffected; the distribution-level
-   claim of the security proof is what would need the exact basis).
+1. **Lemma 31 as literally stated yields a proper sublattice** of
+   Lambda^perp(A) (measured index ~2^28 already at n=2, q=257; the leading
+   block is outright singular for ~17% of random label sets).  Deeper: the
+   *genuine* basis of these q-ary lattices is so dense that its Gram-Schmidt
+   norms span hundreds of bits - float arithmetic cannot sample over it at
+   all, so the literal sublattice sampler is what makes standard-precision
+   implementations possible.  This repo ships both: the fast paper-literal
+   default, and an opt-in exact pipeline (`BLT25_EXACT_BASIS=1`, needs
+   python-flint) that builds a verified genuine basis via MG02 ToBasis and
+   samples over it with arbitrary-precision Gram-Schmidt - tested for
+   distributional quality, determinism, and explainability.  For
+   TrapGen-shaped matrices (the C side) a provably exact structural basis is
+   the default.  See AUDIT.md S3.1 - this is erratum-grade feedback for the
+   paper.
 2. **Toy parameters** are calibrated for correctness margins, not security.
+
+## Configuration switches
+
+- `BLT25_EXACT_BASIS=1|0|auto` - genuine-basis mode for the WWW24 sampler
+  (default off: flint HNF + O(M^3) arbitrary-precision work).
+- `BLT25_PORTABLE_GS=1` - BLAS-free, exactly-specified float64 Gram-Schmidt
+  so heterogeneous decryptors derive bit-identical openings (~30-100x
+  slower than LAPACK).
+- `bibe.setup(..., compress_pk=True)` - Remark 2 seed-compressed public key.
+- `blt25.bibe_cca` - the Section 1.2 anti-replication / CCA-style wrapper
+  (Lamport OTS over SHAKE-256).
+- Threshold GPV runs at genuine Theorem-7-scale flooding (q > 2^31 via the
+  exact big-integer backend); see `test_gpv_at_theorem7_scale_flooding`.
 
 ## License / provenance
 
