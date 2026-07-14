@@ -24,7 +24,7 @@ concrete and testable.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from .gadget import gadget_dims
 from .modq import next_prime

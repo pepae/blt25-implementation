@@ -85,11 +85,11 @@ def setup(T_C: np.ndarray, N: int, tau: int, q: int,
     entry mod q is the entry itself, so sharing over Z_q loses nothing.
     """
     m, mt = T_C.shape
-    rng = np.random.default_rng(int.from_bytes(secrets.token_bytes(8), "big"))
+    coin = random_stream()
     # coefficient tensors: degree tau-1 polynomial per entry, constant = T_C
     coeffs = [np.asarray(T_C, dtype=np.int64) % q]
     for _ in range(tau - 1):
-        coeffs.append(rng.integers(0, q, size=(m, mt), dtype=np.int64))
+        coeffs.append(coin.uniform_mod_mat(m, mt, q))
     shares = []
     for i in range(1, N + 1):
         acc = np.zeros((m, mt), dtype=np.int64)

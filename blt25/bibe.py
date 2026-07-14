@@ -140,11 +140,13 @@ def derive(pk: PublicKey, identities, sidsp: bytes | None = None) -> Derivation:
     oracle Hsp^th (threshold scheme, Definition 17); otherwise from Hsp
     (Definition 15).
     """
+    from .hashes import _encode_identity, _ser
     p = pk.params
     identities = tuple(identities)
     if len(identities) > p.ell:
         raise ValueError(f"batch too large ({len(identities)} > ell={p.ell})")
-    key = pk.fingerprint() + repr(identities).encode() + (sidsp or b"")
+    key = pk.fingerprint() + _ser([_encode_identity(r) for r in identities],
+                                  sidsp)
     cached = _derivation_cache.get(key)
     if cached is not None:
         return cached
