@@ -96,3 +96,45 @@ def test_tail_cut():
     for _ in range(500):
         z = sample_z(0.0, sigma, st)
         assert abs(z) < 14 * s
+
+
+def test_spec_scale_flooding_widths():
+    """Regression (review finding): sampling must work at sigma = 2^lambda -
+    the flooding scale Theorem 5 / Remark 3 requires - not just at toy widths.
+    The old +-1 CDF fix-up walk diverged beyond sigma ~ 2^66."""
+    for lg in (66, 70, 80, 128):
+        sigma = 2.0 ** lg
+        s = sd_of(sigma)
+        st = stream_from_bytes(b"flood%d" % lg)
+        zs = [sample_z(0.0, sigma, st) for _ in range(3)]
+        assert all(abs(z) < 15 * s for z in zs)
+        st2 = stream_from_bytes(b"flood%d" % lg)
+        assert zs == [sample_z(0.0, sigma, st2) for _ in range(3)]
+        xi = explain_z(zs[0], 0.0, sigma)
+        x = Fraction(2 * xi + 1, 2 ** (NBITS + 1))
+        cdf = _make_cdf(0.0, sigma)
+        assert cdf.F(zs[0] - 1) <= x < cdf.F(zs[0])
+
+
+def test_extreme_tape_reaches_true_tails():
+    """Regression (review follow-up): the erf64 regime must not clamp the
+    extreme tails to ~8.3 sd (float64 saturation); tail values delegate to
+    mpmath, so the most extreme 128-bit tapes land at ~13.1 sd."""
+
+    class Tape:
+        def __init__(self, xi):
+            self.xi, self.bits_consumed = xi, 0
+
+        def take_bits(self, k):
+            assert k == NBITS
+            return self.xi
+
+    for sigma in (500.0, 2.0 ** 20, 2.0 ** 39):
+        s = sd_of(sigma)
+        for xi in (0, 2 ** NBITS - 1):
+            z = sample_z(0.0, sigma, Tape(xi))
+            assert 12.5 * s < abs(z) < 14 * s
+            rb = explain_z(z, 0.0, sigma)
+            x = Fraction(2 * rb + 1, 2 ** (NBITS + 1))
+            cdf = _make_cdf(0.0, sigma)
+            assert cdf.F(z - 1) <= x < cdf.F(z)

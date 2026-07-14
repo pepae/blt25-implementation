@@ -149,6 +149,17 @@ flooded key still fits a small modulus; the Renyi-divergence security margin
 is therefore nominal only.  The samplers accept arbitrary widths (the mpmath
 regime handles 2^lambda-scale flooding) if callers set spec-scale parameters.
 
+*Review note:* an adversarial code review of this repository found (and we
+fixed) a real bug here: the original CDF inversion used a +-1 fix-up walk
+from a float64 initial guess, which deterministically raised for
+sigma >~ 2^70 - i.e. exactly at the spec-scale flooding widths this section
+describes.  Inversion is now exponential bracketing + bisection with a
+full-precision initial guess in the mpmath regime, and the float64 erf CDF
+delegates its tails (values within 2^-40 of 0/1) to mpmath so extreme tapes
+are not clamped at ~8.3 sd and per-step CDF increments never collapse.
+Regression tests: `test_spec_scale_flooding_widths`,
+`test_extreme_tape_reaches_true_tails`.
+
 ### S3.6 Hash instantiations
 
 All random oracles are SHAKE-256 with domain separation; mod-q outputs take

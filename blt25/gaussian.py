@@ -89,22 +89,39 @@ class _ExactCDF:
 
 
 class _Erf64CDF:
-    """Float64 erf-based CDF with first Euler-Maclaurin correction."""
+    """Float64 erf-based CDF with first Euler-Maclaurin correction.
+
+    Tail values (within 2^-40 of 0 or 1) are delegated to the mpmath
+    implementation: float64 saturates around 8.3 standard deviations and its
+    increments collapse below the double spacing for large widths, which
+    would silently clamp the extreme tails (~2^-53 tape mass) and could give
+    explain_z empty intervals.  The delegation threshold is chosen so the
+    per-step probability mass at the seam (~6.7 sd) dominates the float64
+    evaluation error, keeping F monotone across the seam.
+    """
+
+    _TAIL = 2.0 ** -40
 
     def __init__(self, c: float, sigma: float):
         self.c = float(c)
+        self.sigma = float(sigma)
         self.s = sd_of(sigma)
+        self._mp: _ErfMpCDF | None = None
+
+    def _mp_tail(self, z: int) -> Fraction:
+        if self._mp is None:
+            self._mp = _ErfMpCDF(self.c, self.sigma, NBITS + 96)
+        return self._mp.F(z)
 
     def F(self, z: int) -> Fraction:
         t = (z + 0.5 - self.c) / self.s
-        if t <= -38.0:
-            return Fraction(0)
-        if t >= 38.0:
-            return Fraction(1)
+        if abs(t) >= 38.0:
+            return self._mp_tail(z)
         phi_cdf = 0.5 * math.erfc(-t / math.sqrt(2.0))
         phi_pdf = math.exp(-0.5 * t * t) / _SQRT2PI
         val = phi_cdf + t * phi_pdf / (24.0 * self.s * self.s)
-        val = min(max(val, 0.0), 1.0)
+        if not self._TAIL < val < 1.0 - self._TAIL:
+            return self._mp_tail(z)
         return Fraction(val)
 
 
@@ -159,6 +176,13 @@ def _make_cdf(c: float, sigma: float):
 
 def _initial_guess(x: Fraction, c: float, sigma: float) -> int:
     s = sd_of(sigma)
+    if s > _MP_S_MIN:
+        # full-precision guess: float64 would be ~s * 2^-53 lattice points off
+        with mp.workprec(NBITS + int(math.log2(s)) + 48):
+            xf = mp.mpf(x.numerator) / mp.mpf(x.denominator)
+            t = mp.sqrt(2) * mp.erfinv(2 * xf - 1)
+            z = mp.floor(mp.mpf(c) + (mp.mpf(sigma) / mp.sqrt(2 * mp.pi)) * t)
+            return int(z)
     xf = float(x)
     xf = min(max(xf, 1e-300), 1.0 - 1e-16)
     try:
@@ -166,10 +190,6 @@ def _initial_guess(x: Fraction, c: float, sigma: float) -> int:
     except Exception:
         t = 0.0
     t = min(max(t, -45.0), 45.0)
-    if s > _MP_S_MIN:
-        with mp.workprec(NBITS + int(math.log2(s)) + 48):
-            z = mp.floor(mp.mpf(c) + (mp.mpf(sigma) / mp.sqrt(2 * mp.pi)) * t)
-            return int(z)
     return int(math.floor(c + s * t))
 
 
@@ -178,24 +198,45 @@ def sample_z(c: float, sigma: float, stream: BitStream, nbits: int = NBITS) -> i
 
     Consumes exactly `nbits` bits.  Output is z = min{ w : x < F(w) } for
     x = (bits + 1/2) / 2^nbits.
+
+    The CDF is inverted by exponential bracketing followed by bisection around
+    the analytic initial guess, so the number of F evaluations is logarithmic
+    in the guess error - correct and fast at any width (a +-1 fix-up walk from
+    a float64 guess breaks down beyond sigma ~ 2^66; found in review).
     """
     xi = stream.take_bits(nbits)
     x = Fraction(2 * xi + 1, 2 ** (nbits + 1))
     cdf = _make_cdf(c, sigma)
-    z = _initial_guess(x, c, sigma)
-    # fix-up: establish invariant F(z-1) <= x < F(z)
-    guard = 0
-    while x >= cdf.F(z):
-        z += 1
-        guard += 1
-        if guard > 10_000:
-            raise RuntimeError("CDF inversion diverged (F too flat?)")
-    while x < cdf.F(z - 1):
-        z -= 1
-        guard += 1
-        if guard > 20_000:
-            raise RuntimeError("CDF inversion diverged")
-    return z
+    g = _initial_guess(x, c, sigma)
+    # z = first w with P(w) := (x < F(w)) true; P is monotone in w
+    if x < cdf.F(g):
+        hi, lo, step = g, g - 1, 1
+        for _ in range(300):
+            if not x < cdf.F(lo):
+                break
+            hi = lo
+            step *= 2
+            lo = g - step
+        else:
+            raise RuntimeError("CDF bracket search diverged (non-monotone F?)")
+    else:
+        lo, hi, step = g, g + 1, 1
+        for _ in range(300):
+            if x < cdf.F(hi):
+                break
+            lo = hi
+            step *= 2
+            hi = g + step
+        else:
+            raise RuntimeError("CDF bracket search diverged (non-monotone F?)")
+    # invariant: P(lo) false, P(hi) true
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if x < cdf.F(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
 
 
 def explain_z(z: int, c: float, sigma: float, nbits: int = NBITS,
