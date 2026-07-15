@@ -17,9 +17,15 @@ key-homomorphic PRF (Appendix A.4), and the Waters-Wee-Wu shifted
 multi-preimage trapdoor sampler with d-bit labels (Appendix B, with the
 sparse indicator-function evaluation that keeps Expand polynomial).
 
-> **SECURITY WARNING.**  Research prototype.  The runnable parameter presets
-> are toy-sized and provide **no** cryptographic security; the code is not
-> constant-time and does not manage secrets.  See PARAMS.md and AUDIT.md.
+Note: this is a research prototype.  The runnable parameter presets are
+toy-sized and provide no cryptographic security; the code is not
+constant-time and does not manage secrets.  The paper's provably secure
+parameters are not runnable by this or any implementation of its algorithms
+as written (at lambda = 128 the per-batch sampler works over a matrix with
+~10^9 columns, and its cost is cubic in that dimension); making them
+practical requires further research, e.g. a ring/module variant of the
+construction or an explainable version of the Micciancio-Peikert gadget
+sampler.  See PARAMS.md and AUDIT.md.
 
 ## Layout
 
